@@ -514,6 +514,7 @@ class CommonNode(BaseNode):
         """
         print(response.encode(self._shells[shell]._encoding))
 
+
 __all__ = [
     'HighLevelShellAPI',
     'LowLevelShellAPI',
