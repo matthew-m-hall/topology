@@ -25,116 +25,143 @@ from __future__ import unicode_literals, absolute_import
 from __future__ import print_function, division
 
 import logging
-from datetime import datetime
 from collections import OrderedDict
 from abc import ABCMeta, abstractmethod
 
 from six import add_metaclass, iterkeys
 
-from .service import BaseService
-from ..libraries.manager import LibsProxy
-from .shell import ShellContext, BaseShell
-
+from topology.platforms.service import BaseService
+from topology.platforms.connection import HighLevelShellAPI, LowLevelShellAPI
+from topology.libraries.manager import LibsProxy
 
 log = logging.getLogger(__name__)
 
 
-@add_metaclass(ABCMeta)
-class HighLevelShellAPI(object):
+class NonExistingConnectionError(Exception):
     """
-    API used to interact with node shells.
+    Exception raised by the connection API when trying to use a non-existent
+    connection.
+    """
+    def __init__(self, connection):
+        super(Exception, self).__init__(
+            self, 'Non-existing connection {}.'.format(connection)
+        )
 
-    :var str default_shell: Engine node default shell.
+
+class UnsupportedConnectionTypeError(Exception):
+    """
+    Exception raised by the connection API when trying to use an unsupported
+    connection type.
+    """
+    def __init__(self, connection_type):
+        super(Exception, self).__init__(
+            self, '{} connections are not supported on this node.'
+            .format(connection_type)
+        )
+
+
+@add_metaclass(ABCMeta)
+class ConnectionAPI(object):
+    """
+    API used to manage connections
     """
 
     @property
-    def default_shell(self):
-        raise NotImplementedError('default_shell')
+    def default_connection(self):
+        raise NotImplementedError('default_connection')
 
-    @default_shell.setter
-    def default_shell(self, value):
-        raise NotImplementedError('default_shell.setter')
-
-    @abstractmethod
-    def available_shells(self):
-        """
-        Get the list of available shells.
-
-        :return: The list of all available shells. The first element is the
-         default (if any).
-        :rtype: List of str.
-        """
+    @default_connection.setter
+    def default_connection(self, connection):
+        raise NotImplementedError('default_connection.setter')
 
     @abstractmethod
-    def send_command(self, cmd, shell=None, silent=False):
+    def is_connected(self, connection=None):
         """
-        Send a command to this engine node.
+        Shows if the connection to the n is active.
 
-        :param str cmd: Command to send.
-        :param str shell: Shell that must interpret the command.
-         ``None`` for the default shell. Is up to the engine node to
-         determine what its default shell is.
-        :param bool silent: True to call the shell logger, False
+        :param str connection: Name of the connection to check if connected. If
+         not defined, the default connection will be checked.
+        :rtype: bool
+        :return: True if there is an active connection to the shell, False
          otherwise.
-
-        :return: The response of the command.
-        :rtype: str
-        """
-
-    def __call__(self, *args, **kwargs):
-        return self.send_command(*args, **kwargs)
-
-    @abstractmethod
-    def _register_shell(self, name, shellobj):
-        """
-        Allow plugin developers to register a shell when initializing a node.
-
-        :param str name: Unique name of the shell to register.
-        :param shellobj: The shell object to register.
-        :type shellobj: BaseShell
-        """
-
-
-@add_metaclass(ABCMeta)
-class LowLevelShellAPI(object):
-    """
-    API used to interact with low level shell objects.
-    """
-
-    @abstractmethod
-    def use_shell(self, shell):
-        """
-        Create a context manager that allows to use a different default shell
-        in a context, including access to it's low-level shell object.
-
-        :param str shell: The default shell to use in the context.
-
-        Assuming, for example, that a node has two shells:
-        ``bash`` and ``python``:
-
-        ::
-
-            with mynode.use_shell('python') as python:
-                # This context manager sets the default shell to 'python'
-                mynode('from os import getcwd')
-                cwd = mynode('print(getcwd())')
-
-                # Access to the low-level shell API
-                python.send_command('foo = (', matches=['... '])
-                ...
         """
 
     @abstractmethod
-    def get_shell(self, shell):
+    def login(self, connection=None):
         """
-        Get the shell object associated with the given name.
+        Login on the given connection
+        """
 
-        The shell object allows to access the low-level shell API.
+    @abstractmethod
+    def connect(self, connection=None, connection_type=None,
+                via_node=None):
+        """
+        Creates a connection to the node.
 
-        :param str shell: Name of the shell.
+        :param str connection: Name of the connection to be created. If not
+         defined, an attempt to create the default connection will be done. If
+         the default connection is already connected, an exception will be
+         raised. If defined in the call but no default connection has been
+         defined yet, this connection will become the default one. If the
+         connection is already connected, an exception will be raised.
+        :param str connection_type: The connection type. If the given
+         connection type not supported by the node an Exeption will be raised.
+         If a type is specified and the connection already exists, an Exception
+         will be raised
+        """
 
-        :return: The associated shell object.
-        :rtype: BaseShell
+    @abstractmethod
+    def disconnect(self, connection=None):
+        """
+        Terminates a connection to the shell.
+
+        :param str connection: Name of the connection to be disconnected. If
+         not defined, the default connection will be disconnected. If the
+         default connection is disconnected, no attempt will be done to define
+         a new default connection, the user will have to either create a new
+         default connection by calling ``connect`` or by defining another
+         existing connection as the default one.
+        """
+
+    @abstractmethod
+    def available_connection_types(self):
+        """
+        get a list of connection types avaliable
+
+        This method will just list the available keys in the internal ordered
+        dictionary.
+        """
+
+    @abstractmethod
+    def _get_connection_type(self, connection_type=None):
+        """
+        get a connection class to instantiate. If the type is
+        not provided the default connection type for the node
+        will be returned. If the type requested is not registered
+        with the node, an exception will be raised
+
+        :param str connection_type: The connection type. If not specified, the
+         default connection type is returned. If the given connection
+         type not supported by the node an Exeption will be raised.
+        """
+
+    @abstractmethod
+    def available_connections(self):
+        """
+        get a list of the connection that have been made
+
+        This method will just list the available keys in the internal ordered
+        dictionary.
+        """
+
+    @abstractmethod
+    def get_connection(self, connection=None):
+        """
+        Get the connection object for the given connection name.
+
+        :param str connection: Name of the connection.
+        :rtype: BaseConnection
+        :return: The the connection objectthat handles the connection.
         """
 
 
@@ -225,7 +252,8 @@ class StateAPI(object):
 
 
 @add_metaclass(ABCMeta)
-class BaseNode(HighLevelShellAPI, LowLevelShellAPI, ServicesAPI, StateAPI):
+class BaseNode(ConnectionAPI, HighLevelShellAPI, LowLevelShellAPI,
+               ServicesAPI, StateAPI):
     """
     Base engine node class.
 
@@ -256,13 +284,13 @@ class CommonNode(BaseNode):
     """
     Base engine node class with a common base implementation.
 
-    This class provides a basic common implementation for managing shells and
-    services. Internal ordered dictionaries handles the keys for
-    shells and services objects that implements the logic for those shells or
-    services.
+    This class provides a basic common implementation for managing connections
+    and services. Internal ordered dictionaries handles the keys for
+    connection types and services objects that implements the logic for those
+    connections or services.
 
     Child classes will then only require to call registration methods
-    :meth:`_register_shell` and :meth:`_register_service`.
+    :meth:`_register_connection_type` and :meth:`_register_service`.
 
     In particular, this class implements support for Communication Libraries
     using class :class:`LibsProxy` that will hook with all available libraries.
@@ -279,9 +307,11 @@ class CommonNode(BaseNode):
     def __init__(self, identifier, **kwargs):
         super(CommonNode, self).__init__(identifier, **kwargs)
 
-        # Shell(s) API
-        self._default_shell = None
-        self._shells = OrderedDict()
+        # connections API
+        self._default_connection = None
+        self._connections = OrderedDict()
+        self._default_connection_type = None
+        self._connection_types = OrderedDict()
 
         # Services API
         self._services = OrderedDict()
@@ -292,21 +322,157 @@ class CommonNode(BaseNode):
         # Communication Libraries support
         self.libs = LibsProxy(self)
 
+    # ConnectionAPI
+
+    @property
+    def default_connection(self):
+        return self._default_connection
+
+    @default_connection.setter
+    def default_connection(self, connection):
+        if connection not in self._connections:
+            raise NonExistingConnectionError(connection)
+        self._default_connection = connection
+
+    def is_connected(self, connection=None):
+        """
+        See :meth:`ConnectionAPI.is_connected` for more information.
+        """
+        return self.get_connection(connection).is_connected()
+
+    def login(self, connection=None):
+        """
+        Login on the given connection
+        """
+        self.get_connection(connection).login()
+
+    def connect(self, connection=None, connection_type=None,
+                via_node=None, **kwargs):
+        """
+        See :meth:`ConnectionAPI.connect` for more information.
+        """
+        connection = connection or self._default_connection or '0'
+
+        if connection not in self._connections:
+            typeobj = self._get_connection_type(connection_type)
+            new_connection = typeobj(connection, self, **kwargs)
+            self._connections[connection] = new_connection
+
+        try:
+            via_connection = None
+
+            if(via_node and via_node is not self):
+                via_name = 'to_{}_{}'.format(self.identifier, connection)
+                via_node.connect(connection=via_name, via_node=via_node)
+                via_connection = via_node.get_connection(via_name)
+
+            self.get_connection(connection).connect(
+                via_connection=via_connection
+            )
+        except:
+            # Always remove a bad connection if it failed
+            del self._connections[connection]
+            raise
+
+        # Set connection as default connection if required
+        if self.default_connection is None and via_node is None:
+            self.default_connection = connection
+
+    def disconnect(self, connection=None):
+        """
+        See :meth:`ConnectionAPI.disconnect` for more information.
+        """
+        self.get_connection(connection).disconnect()
+
+    def disconnect_all(self):
+        """
+        disconnect all the connections to this node
+        """
+        for connection in self.available_connections():
+            conn = self.get_connection(connection)
+            if conn.is_connected():
+                conn.disconnect()
+
+    def available_connection_types(self):
+        """
+        See :meth:`ConnectionAPI.available_connection_types` for more
+        information.
+        """
+        return list(iterkeys(self._connection_types))
+
+    def _get_connection_type(self, connection_type=None):
+        """
+        See :meth:`ConnectionAPI._get_connection_type` for more information.
+        """
+
+        connection_type = connection_type or self._default_connection_type
+
+        if connection_type not in self._connection_types:
+            raise UnsupportedConnectionTypeError(connection_type)
+
+        return self._connection_types[connection_type]
+
+    def available_connections(self):
+        """
+        See :meth:`ConnectionAPI.available_connections` for more information.
+        """
+        return list(iterkeys(self._connections))
+
+    def get_connection(self, connection=None):
+        """
+        See :meth:`ConnectionAPI.get_connection` for more information.
+        """
+
+        connection = connection or self._default_connection or '0'
+
+        if connection not in self._connections:
+            raise NonExistingConnectionError(connection)
+
+        return self._connections[connection]
+
+    def _register_connection_type(self, name, typeobj):
+        """
+        Allow plugin developers to register a connection type when initializing
+        a node. the first type registered will be set as the default type
+
+        :param str name: Unique name of the connection type to register.
+        :param type type: The connection type to register.
+        """
+        assert isinstance(typeobj, type)
+
+        if name in self._connection_types:
+            raise KeyError(
+                'Connection type "{}" already registered'.format(name))
+        if not name:
+            raise KeyError('Invalid name for connection "{}"'.format(name))
+
+        self._connection_types[name] = typeobj
+
+        if self._default_connection_type is None:
+            self._default_connection_type = name
+
+    @abstractmethod
+    def _register_shells(self, connectionobj):
+        """
+        Create and register shells on the given connection
+        This funcion should to be called by the connections
+        _register_shells function.
+        This function should then call the connections
+        _register_shell function for each shell to register
+        """
+        raise NotImplementedError('_register_shells')
+
     # HighLevelShellAPI
 
     @property
     def default_shell(self):
-        return self._default_shell
+        return self.get_connection(self.default_connection).default_shell()
 
     @default_shell.setter
     def default_shell(self, value):
-        if value not in self._shells:
-            raise KeyError(
-                'Cannot set default shell. Unknown shell "{}"'.format(value)
-            )
-        self._default_shell = value
+        self.get_connection(self.default_connection).default_shell(value)
 
-    def available_shells(self):
+    def available_shells(self, connection=None):
         """
         Implementation of the public ``available_shells`` interface.
 
@@ -315,9 +481,9 @@ class CommonNode(BaseNode):
 
         See :meth:`HighLevelShellAPI.available_shells` for more information.
         """
-        return list(iterkeys(self._shells))
+        return self.get_connection(connection).available_shells()
 
-    def send_command(self, cmd, shell=None, silent=False):
+    def send_command(self, cmd, shell=None, silent=False, connection=None):
         """
         Implementation of the public ``send_command`` interface.
 
@@ -328,58 +494,13 @@ class CommonNode(BaseNode):
         See :meth:`HighLevelShellAPI.send_command` for more information.
         """
 
-        # Check at least one shell is available
-        if not self._shells:
-            raise Exception(
-                'Node {} doens\'t have any shell.'.format(self.identifier)
-            )
-
-        # Check if default shell is already set
-        if self._default_shell is None:
-            self._default_shell = list(iterkeys(self._shells))[0]
-
-        # Check requested shell is supported
-        if shell is None:
-            shell = self._default_shell
-        elif shell not in self._shells.keys():
-            raise Exception(
-                'Shell {} is not supported.'.format(shell)
-            )
-
-        active_shell = self.get_shell(shell)
-
-        active_shell.send_command(cmd, silent=silent)
-
-        response = active_shell.get_response(silent=silent)
-
-        return response
-
-    def _register_shell(self, name, shellobj):
-        """
-        Implementation of the private ``_register_shell`` interface.
-
-        This method will lookup for the shell name argument in an internal
-        ordered dictionary and, if inexistent, it will register the given
-        shell object.
-
-        See :meth:`HighLevelShellAPI._register_shell` for more information.
-        """
-        assert isinstance(shellobj, BaseShell)
-
-        if name in self._shells:
-            raise KeyError('Shell "{}" already registered'.format(name))
-        if not name:
-            raise KeyError('Invalid name for shell "{}"'.format(name))
-
-        self._shells[name] = shellobj
-
-        # Add the node identifier and the shell name to the shell object to
-        # enable logging in the shell object itself
-        shellobj._register_node(self.identifier, name)
+        return self.get_connection(connection).send_command(
+            cmd, shell=shell, silent=silent
+        )
 
     # LowLevelShellAPI
 
-    def get_shell(self, shell):
+    def get_shell(self, shell, connection=None):
         """
         Implementation of the public ``get_shell`` interface.
 
@@ -388,13 +509,10 @@ class CommonNode(BaseNode):
 
         See :meth:`LowLevelShellAPI.get_shell` for more information.
         """
-        if shell not in self._shells:
-            raise KeyError(
-                'Unknown shell "{}"'.format(shell)
-            )
-        return self._shells[shell]
 
-    def use_shell(self, shell):
+        return self.get_connection(connection).get_shell(shell)
+
+    def use_shell(self, shell, connection=None):
         """
         Implementation of the public ``use_shell`` interface.
 
@@ -404,7 +522,8 @@ class CommonNode(BaseNode):
 
         See :meth:`LowLevelShellAPI.use_shell` for more information.
         """
-        return ShellContext(self, shell)
+
+        return self.get_connection(connection).use_shell(shell)
 
     # ServicesAPI
 
@@ -491,32 +610,11 @@ class CommonNode(BaseNode):
         """
         self._enabled = False
 
-    def _log_command(self, command, shell):
-        """
-        Command logging function for low-level shell API usage.
-
-        :param str command: Sent command to be logged.
-        :param str shell: Name of the shell that sends the command.
-        """
-
-        print(
-            '{} [{}].send_command(\'{}\', shell=\'{}\') ::'.format(
-                datetime.now().isoformat(), self.identifier, command, shell
-            )
-        )
-
-    def _log_response(self, response, shell):
-        """
-        Response logging function for low-level shell API usage.
-
-        :param str response: Command response to be logged.
-        :param str shell: Name of the shell that receives the command response.
-        """
-        print(response.encode(self._shells[shell]._encoding))
 
 __all__ = [
-    'HighLevelShellAPI',
-    'LowLevelShellAPI',
+    'NonExistingConnectionError',
+    'UnsupportedConnectionTypeError',
+    'ConnectionAPI',
     'ServicesAPI',
     'StateAPI',
     'BaseNode',

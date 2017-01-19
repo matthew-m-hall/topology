@@ -25,8 +25,8 @@ from __future__ import print_function, division
 import logging
 from datetime import datetime
 
-from .node import CommonNode
-from .platform import BasePlatform
+from topology.platforms.node import CommonNode
+from topology.platforms.platform import BasePlatform
 
 
 log = logging.getLogger(__name__)
@@ -147,5 +147,7 @@ class DebugNode(CommonNode):
             self.identifier, self.metadata
         )
 
+    def _register_shells(self, connectionobj):
+        pass
 
 __all__ = ['DebugPlatform', 'DebugNode']

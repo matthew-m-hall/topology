@@ -29,7 +29,7 @@ from collections import OrderedDict
 
 from pkg_resources import iter_entry_points
 
-from .node import BaseNode
+from topology.platforms.node import BaseNode
 
 
 log = logging.getLogger(__name__)

@@ -30,7 +30,7 @@ from inspect import isclass
 
 from pkg_resources import iter_entry_points
 
-from .platform import BasePlatform
+from topology.platforms.platform import BasePlatform
 
 
 log = logging.getLogger(__name__)

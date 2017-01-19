@@ -92,7 +92,7 @@ class BaseLogger(object):
         self._level = None
         self._log_dir = None
 
-        self._name = ''.join(map(str, nameparts.values()))
+        self._name = '_'.join(map(str, nameparts.values()))
         self.logger = logging.getLogger(self._name)
 
         self.propagate = propagate
@@ -268,7 +268,7 @@ class ConnectionLogger(BaseLogger):
 
     Connection loggers can be located with the name::
 
-        <context>.pexpect.<node_identifier>.<shell_name>.<connection>
+        <context>.pexpect.<node_identifier>.<connection>
 
     Where ``<context>`` is optional if running interactively or if the context
     in the LoggerManager has not been set.
@@ -277,8 +277,9 @@ class ConnectionLogger(BaseLogger):
         super(ConnectionLogger, self).__init__(*args, **kwargs)
         self.logger.addHandler(logging.StreamHandler())
 
-    def log_send_command(self, command, matches, newline, timeout):
+    def log_send_command(self, shell, command, matches, newline, timeout):
         fields = {
+            'shell': shell,
             'command': command,
             'matches': matches,
             'newline': newline,
@@ -287,21 +288,22 @@ class ConnectionLogger(BaseLogger):
         fields.update(self._nameparts)
 
         log_entry = (
-            '[{node_identifier}].get_shell({shell_name}).send_command('
+            '[{node_identifier}:{connection}:{shell}].send_command('
             '\'{command}\', '
             'matches={matches}, newline={newline}, timeout={timeout}'
             ')'
         ).format(**fields)
         self.logger.info(log_entry)
 
-    def log_get_response(self, response):
+    def log_get_response(self, shell, response):
         fields = {
+            'shell': shell,
             'response': response
         }
         fields.update(self._nameparts)
 
         log_entry = (
-            '[{node_identifier}].get_shell({shell_name}).get_response() '
+            '[{node_identifier}:{connection}:{shell}].get_response() '
             '->\n'
             '{response}'
         ).format(**fields)

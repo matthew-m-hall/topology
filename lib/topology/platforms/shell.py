@@ -22,15 +22,10 @@ topology shell api module.
 from __future__ import unicode_literals, absolute_import
 from __future__ import print_function, division
 
-from warnings import warn
 from re import sub as regex_sub
-from collections import OrderedDict
 from abc import ABCMeta, abstractmethod
 
 from six import add_metaclass
-from pexpect import spawn as Spawn  # noqa
-
-from topology.logging import get_logger
 
 
 TERM_CODES_REGEX = r'\x1b[E|\[](\?)?([0-9]{1,2}(;[0-9]{1,2})?)?[m|K|h|H|r]?'
@@ -66,51 +61,14 @@ purpose of executing commands and parsing their outputs
 """
 
 
-class DeprecatedTopologyFunction(UserWarning):
-    pass
-
-
-class NonExistingConnectionError(Exception):
-    """
-    Exception raised by the shell API when trying to use a non-existent
-    connection.
-    """
-    def __init__(self, connection):
-        super(Exception, self).__init__(
-            self, 'Non-existing connection {}.'.format(connection)
-        )
-
-
-class AlreadyConnectedError(Exception):
-    """
-    Exception raised by the shell API when trying to create a connection
-    already created.
-    """
-    def __init__(self, connection):
-        super(Exception, self).__init__(
-            self, '{} is already connected.'.format(connection)
-        )
-
-
-class AlreadyDisconnectedError(Exception):
-    """
-    Exception raised by the shell API when trying to disconnect an already
-    disconnected connection.
-    """
-    def __init__(self, connection):
-        super(Exception, self).__init__(
-            self, '{} is already disconnected.'.format(connection)
-        )
-
-
 class DisconnectedError(Exception):
     """
     Exception raised by the shell API when trying to perform an operation on a
     disconnected connection.
     """
-    def __init__(self, connection):
+    def __init__(self, connection_identifier):
         super(Exception, self).__init__(
-            self, '{} is disconnected.'.format(connection)
+            self, '{} is disconnected.'.format(connection_identifier)
         )
 
 
@@ -124,70 +82,15 @@ class BaseShell(object):
     mechanism is to be used to find a terminal prompt that signals the end of
     the terminal response to a command sent to it.
 
-    Shells of this kind also represent an actual shell in the node. This means
-    that one of these objects is expected to exist for every one of the shells
-    in the node. These shells are accessible through a *connection* that may be
-    implemented using a certain command (``telnet``, or ``ssh``, for example).
-    It may be possible to have several connections to the same shell, so these
-    shells support multiple connections.
+    Shells of this kind also represent an actual shell in the node's
+    connection. This means that one of these objects is expected to exist
+    for every one of the shells in the node's connection.
 
-    The behavior that these connections must follow is this one:
-
-    #. New connections to the shell are created by calling the ``connect``
-       command of the shell with the name of the connection to be created
-       defined in its ``connection`` attribute.
-    #. Connections can be disconnected by calling the ``disconnect`` command of
-       the shell.
-    #. Connections can be either connected or disconnected.
-    #. Existing disconnected connections can be connected again by calling the
-       ``connnect`` command of the shell.
-    #. An attempt to connect an already connected shell or to disconnect an
-       already disconnected shell will raise an exception.
-    #. These shells will have a *default* connection that will be used if the
-       ``connection`` attribute of the shell methods is set to ``None``.
-    #. The default connection will be set to ``None`` when the shell is
-       initialized.
-    #. If the default connection is ``None`` and the ``connect`` command is
-       called, it will set the default connection as the connection used in
-       this call. Also, if the previous condition is true and if this
-       connection attribute is set to ``None``, the name of the default
-       connection will be set to '0'.
-    #. Every time any operation with the shell is attempted, a connection needs
-       to be specified, if this connection is specified to be ``None``, the
-       *default* connection of the shell will be used.
-    #. If any method other than ``connect`` and ``send_command`` is called with
-       a connection that is not defined yet, an exception will be raised.
-    #. If ``auto_connect`` is True, calling ``send_command`` with a
-       disconnected or nonexistent connection will create and use a new
-       connection. An exception will be raised otherwise.
-
-    The behavior of these operations is defined in the following methods,
-    implementations of this class are expected to behave as defined here.
-
-    Be aware that the method ``_register_shell`` of the node will add two
-    attributes to the shell objects:
-
-    #. ``_name``: name of the shell, the matching key of the node's dictionary
-       of shells
-    #. ``_node``: node object that holds the shell object
-
-    The ``_register_shell`` method is usually called in the node's'
-    ``__init__``.
     """
-
-    @property
-    def default_connection(self):
-        raise NotImplementedError('default_connection')
-
-    @default_connection.setter
-    def default_shell(self, value):
-        raise NotImplementedError('default_connection.setter')
 
     @abstractmethod
     def send_command(
-        self, command,
-        matches=None, newline=True,
-        timeout=None, connection=None, silent=False
+        self, command, matches=None, newline=True, timeout=None, silent=False
     ):
         """
         Send a command to the shell.
@@ -199,126 +102,73 @@ class BaseShell(object):
          command, False otherwise.
         :param int timeout: Amount of time to wait until a prompt match is
          found in the command response.
-        :param str connection: Name of the connection to be used to send the
-         command. If not defined, the default connection will be used.
         :param bool silent: True to call the connection logger, False
          otherwise.
         """
 
     @abstractmethod
-    def get_response(self, connection=None, silent=False):
+    def get_response(self, silent=False):
         """
         Get a response from the shell connection.
 
         This method can be used to add extra processing to the shell response
         if needed, cleaning up terminal control codes is an example.
 
-        :param str connection: Name of the connection to be used to get the
-         response from. If not defined, the default connection will be used.
         :param bool silent: True to call the connection logger, False
          otherwise.
         :rtype: str
         :return: Shell response to the previously sent command.
         """
 
-    @abstractmethod
-    def is_connected(self, connection=None):
-        """
-        Shows if the connection to the shell is active.
-
-        :param str connection: Name of the connection to check if connected. If
-         not defined, the default connection will be checked.
-        :rtype: bool
-        :return: True if there is an active connection to the shell, False
-         otherwise.
-        """
-
-    @abstractmethod
-    def connect(self, connection=None):
-        """
-        Creates a connection to the shell.
-
-        :param str connection: Name of the connection to be created. If not
-         defined, an attempt to create the default connection will be done. If
-         the default connection is already connected, an exception will be
-         raised. If defined in the call but no default connection has been
-         defined yet, this connection will become the default one. If the
-         connection is already connected, an exception will be raised.
-        """
-
-    @abstractmethod
-    def disconnect(self, connection=None):
-        """
-        Terminates a connection to the shell.
-
-        :param str connection: Name of the connection to be disconnected. If
-         not defined, the default connection will be disconnected. If the
-         default connection is disconnected, no attempt will be done to define
-         a new default connection, the user will have to either create a new
-         default connection by calling ``connect`` or by defining another
-         existing connection as the default one.
-        """
-
-    def execute(self, command, connection=None):
+    def execute(self, command):
         """
         Executes a command.
-
-        If the default connection is not defined, or is disconnected, an
-        exception will be raised.
 
         This is just a convenient method that sends a command to the shell
         using send_command and returns its response using get_response.
 
         :param str command: Command to be sent.
-        :param str connection: Connection to be used to execute this command.
         :rtype: str
         :return: Shell response to the command being sent.
         """
-        self.send_command(command, connection=connection)
-        return self.get_response(connection=connection)
+        self.send_command(command)
+        return self.get_response()
 
-    def __call__(self, command, connection=None):
-        return self.execute(command, connection=connection)
+    def __call__(self, command, ):
+        return self.execute(command)
 
-    def _setup_shell(self, connection=None):
+    def _setup_shell(self):
         """
-        Method called by subclasses that will be triggered after matching the
-        initial prompt.
-
-        This method must do a call to expect before it does one to any sending
-        call (like send or sendline) and it must do a sending call after the
-        last call to expect.
-
-        :param str connection: Name of the connection to be set up. If not
-         defined, the default connection will be set up.
+        Method called by connection to perform any initial actions on a shell
+        before use.
         """
 
-    def _register_node(self, node_identifier, shell_name):
+    @abstractmethod
+    def _register_connection(self, connection, shell_name):
         """
-        Register the node identifier and the assigned shell name on that node
-        in the shell for logging back reference.
+        Register the connection and the assigned shell name on that
+        connection in the shell.
 
-        :param str node_identifier: The identifier of the owner node.
+        :param str connection: The parent connection.
         :param str shell_name: Shell name given in the node to this shell.
         """
 
-    def _register_loggers(
-        self, node, shell, command_logger=None, response_logger=None
-    ):
+    @abstractmethod
+    def enter(self):
         """
-        Register logger functions for command executions and responses.
+        enter the shell from the default shell.
 
-        .. warning::
+        The default shell for a node type will do nothing in this function
+        This method is called when is necessary to switch between shells
+        """
 
-           This function will be removed in future releases.
+    @abstractmethod
+    def exit(self):
+        """
+        Exits to the default shell.
 
-        :param :class:`topology.base.BaseNode` node: Node that holds this
-         shell.
-        :param str shell: Name of the shell to show in the sent command log.
-        :param function command_logger: Function that logs the command being
-         sent. If set to None, the node's _log_command will be used.
-        :param function response_logger: Function that logs the command
-         response. If set to None, the node's _log_response will be used.
+        The default shell for a node type will do nothing in this function
+        This method is called when is necessary to switch between shells
         """
 
 
@@ -339,10 +189,6 @@ class PExpectShell(BaseShell):
     :param str initial_prompt: Regular expression that matches the initial
      prompt. This value will be used to match the prompt before calling private
      method ``_setup_shell()``.
-    :param str password: Password to be sent at the beginning of the
-     connection.
-    :param str password_match: Regular expression that matches a password
-     prompt.
     :param str prefix: The prefix to be prepended to all commands sent to this
      shell.
     :param int timeout: Default timeout to use in send_command.
@@ -364,41 +210,23 @@ class PExpectShell(BaseShell):
     """
 
     def __init__(
-            self, prompt,
-            initial_command=None, initial_prompt=None,
-            user=None, user_match='[uU]ser:',
-            password=None, password_match='[pP]assword:',
+            self, prompt, initial_prompt=None,
             prefix=None, timeout=None, encoding='utf-8',
-            try_filter_echo=True, auto_connect=True,
-            spawn_args=None, errors='ignore', **kwargs):
+            try_filter_echo=True,
+            errors='ignore', **kwargs):
 
-        self._connections = OrderedDict()
-        self._default_connection = None
-
-        self._initial_command = initial_command
         self._prompt = prompt
         self._initial_prompt = initial_prompt
-        self._user = user
-        self._user_match = user_match
-        self._password = password
-        self._password_match = password_match
+
         self._prefix = prefix
         self._timeout = timeout or -1
         self._encoding = encoding
         self._try_filter_echo = try_filter_echo
-        self._auto_connect = auto_connect
         self._command_logger = None
         self._response_logger = None
-        self._node_identifier = None
+        self._parent_connection = None
         self._shell_name = None
         self._errors = errors
-
-        # Doing this to avoid having a mutable object as default value in the
-        # arguments.
-        if spawn_args is None:
-            self._spawn_args = {'env': {'TERM': 'dumb'}, 'echo': False}
-        else:
-            self._spawn_args = spawn_args
 
         self._last_command = None
 
@@ -408,72 +236,25 @@ class PExpectShell(BaseShell):
 
         super(PExpectShell, self).__init__(**kwargs)
 
-    @property
-    def default_connection(self):
-        return self._default_connection
-
-    @default_connection.setter
-    def default_connection(self, connection):
-        if connection not in self._connections:
-            raise NonExistingConnectionError(connection)
-        self._default_connection = connection
-
-    @abstractmethod
-    def _get_connect_command(self):
-        """
-        Get the command to be used when connecting to the shell.
-
-        This must be defined by any child class as the return value of this
-        function will define all the connection details to use when creating a
-        connection to the shell. It will be used usually in conjunction with
-        other shell attributes to define the exact values to use when creating
-        the connection.
-
-        :rtype: str
-        :return: The command to be used when connecting to the shell.
-        """
-
-    def _get_connection(self, connection):
-        """
-        Get the pexpect object for the given connection name.
-
-        :param str connection: Name of the connection.
-        :rtype: :class:`pexpect.spawn`
-        :return: The PExpect spawn process that handles the connection.
-        """
-        connection = connection or self._default_connection or '0'
-
-        if connection not in self._connections:
-            raise NonExistingConnectionError(connection)
-
-        return self._connections[connection]
-
     def send_command(
-        self, command,
-        matches=None, newline=True,
-        timeout=None, connection=None, silent=False
+        self, command, matches=None, newline=True, timeout=None, silent=False
     ):
         """
         See :meth:`BaseShell.send_command` for more information.
         """
-        # If auto connect is false, fail if:
-        # 1. Connection is missing
-        # 2. Connection is disconnected
-        if not self._auto_connect:
-            if not self.is_connected(connection):
-                raise DisconnectedError(connection)
 
-        # If auto connect is true, always reconnect unless:
-        # 1. Connection already exists, and
-        # 2. Connection is connected
+        # If auto re-connect is false, fail if connection is disconnected
+        if not self._parent_connection._auto_reconnect:
+            if not self._parent_connection.is_connected():
+                raise DisconnectedError(self._parent_connection.identifier)
+        # If auto re-connect is true, always reconnect unless already connected
         else:
-            try:
-                if not self.is_connected(connection):
-                    self.connect(connection)
-            except NonExistingConnectionError:
-                self.connect(connection)
+            if not self._parent_connection.is_connected():
+                self._parent_connection.connect()
 
-        spawn = self._get_connection(connection)
+        self._parent_connection.active_shell = self
+
+        spawn = self._parent_connection._spawn
 
         # Create possible expect matches
         if matches is None:
@@ -495,7 +276,7 @@ class PExpectShell(BaseShell):
         # Log log_send_command
         if not silent:
             spawn._connection_logger.log_send_command(
-                command, matches, newline, timeout
+                self._shell_name, command, matches, newline, timeout
             )
 
         # Expect matches
@@ -507,12 +288,15 @@ class PExpectShell(BaseShell):
         )
         return match_index
 
-    def get_response(self, connection=None, silent=False):
+    def get_response(self, silent=False):
         """
         See :meth:`BaseShell.get_response` for more information.
         """
-        # Get connection
-        spawn = self._get_connection(connection)
+
+        if not self._parent_connection.is_connected():
+            raise DisconnectedError(self._parent_connection.identifier)
+
+        spawn = self._parent_connection._spawn
 
         # Convert binary representation to unicode using encoding
         text = spawn.before.decode(
@@ -541,131 +325,14 @@ class PExpectShell(BaseShell):
 
         # Log response
         if not silent:
-            spawn._connection_logger.log_get_response(response)
+            spawn._connection_logger.log_get_response(
+                self._shell_name, response)
 
         return response
 
-    def is_connected(self, connection=None):
-        """
-        See :meth:`BaseShell.is_connected` for more information.
-        """
-        # Get connection
-        spawn = self._get_connection(connection)
-        return spawn.isalive()
-
-    def connect(self, connection=None):
-        """
-        See :meth:`BaseShell.connect` for more information.
-        """
-        connection = connection or self._default_connection or '0'
-
-        if connection in self._connections and self.is_connected(connection):
-            raise AlreadyConnectedError(connection)
-
-        # Inject framework logger to the spawn object
-        spawn_args = {
-            'logfile': get_logger(
-                OrderedDict([
-                    ('node_identifier', self._node_identifier),
-                    ('shell_name', self._shell_name),
-                    ('connection', connection)
-                ]),
-                category='pexpect'
-            ),
-        }
-
-        # Create a child process
-        spawn_args.update(self._spawn_args)
-
-        spawn = Spawn(
-            self._get_connect_command().strip(),
-            **spawn_args
-        )
-
-        # Add a connection logger
-        # Note: self._node and self._name were added to this shell in the
-        #       node's call to its _register_shell method.
-        spawn._connection_logger = get_logger(
-            OrderedDict([
-                ('node_identifier', self._node_identifier),
-                ('shell_name', self._shell_name),
-                ('connection', connection)
-            ]),
-            category='connection'
-        )
-
-        self._connections[connection] = spawn
-
-        try:
-            def expect_sendline(prompt, command):
-                if command is not None:
-                    spawn.expect(
-                        prompt, timeout=self._timeout
-                    )
-                    spawn.sendline(command)
-
-            # If connection is via user
-            expect_sendline(self._user_match, self._user)
-
-            # If connection is via password
-            expect_sendline(self._password_match, self._password)
-
-            # If connection is via initial command
-            expect_sendline(self._initial_prompt, self._initial_command)
-
-            # Setup shell before using it
-            self._setup_shell(connection)
-
-            # Wait for command response to match the prompt
-            spawn.expect(
-                self._prompt, timeout=self._timeout
-            )
-
-        except:
-            # Always remove a bad connection if it failed
-            del self._connections[connection]
-            raise
-
-        # Set connection as default connection if required
-        if self.default_connection is None:
-            self.default_connection = connection
-
-    def disconnect(self, connection=None):
-        """
-        See :meth:`BaseShell.disconnect` for more information.
-        """
-        # Get connection
-        spawn = self._get_connection(connection)
-        if not spawn.isalive():
-            raise AlreadyDisconnectedError(connection)
-        spawn.close()
-
-    def _register_node(self, node_identifier, shell_name):
-        self._node_identifier = node_identifier
+    def _register_connection(self, connection, shell_name):
+        self._parent_connection = connection
         self._shell_name = shell_name
-
-    def _register_loggers(
-        self, node, shell, command_logger=None, response_logger=None
-    ):
-
-        warn(
-            'This method is deprecated, instead of calling _register_loggers '
-            'in the shell object, please just call _register_shell in the'
-            ' node that holds the shell object.',
-            category=DeprecatedTopologyFunction
-        )
-
-        self._shell = shell
-
-        if command_logger is None:
-            self._command_logger = node._log_command
-        else:
-            self._command_logger = command_logger
-
-        if response_logger is None:
-            self._response_logger = node._log_response
-        else:
-            self._response_logger = response_logger
 
 
 class PExpectBashShell(PExpectShell):
@@ -679,10 +346,8 @@ class PExpectBashShell(PExpectShell):
     """
     FORCED_PROMPT = '@~~==::BASH_PROMPT::==~~@'
 
-    def __init__(
-            self,
-            initial_prompt='\w+@.+:.+[#$] ', try_filter_echo=False,
-            **kwargs):
+    def __init__(self, initial_prompt='\w+@.+:.+[#$] ', try_filter_echo=False,
+                 **kwargs):
 
         super(PExpectBashShell, self).__init__(
             PExpectBashShell.FORCED_PROMPT,
@@ -691,17 +356,13 @@ class PExpectBashShell(PExpectShell):
             **kwargs
         )
 
-    def _setup_shell(self, connection=None):
+    def _setup_shell(self):
         """
         Overriden setup function that will disable the echo on the device on
         the shell and set a pexpect-safe prompt.
         """
-        spawn = self._get_connection(connection)
 
-        # Wait initial prompt
-        spawn.expect(
-            self._initial_prompt, timeout=self._timeout
-        )
+        spawn = self._parent_connection._spawn
 
         # Remove echo
         spawn.sendline('stty -echo')
@@ -715,38 +376,28 @@ class PExpectBashShell(PExpectShell):
         )
         self._prompt = PExpectBashShell.FORCED_PROMPT
 
+        spawn.expect(
+            self._prompt, timeout=self._timeout
+        )
 
-class ShellContext(object):
-    """
-    Context Manager class for default shell swapping.
+    def enter(self):
+        """
+        see :meth:`topology.platforms.shell.BaseShell.enter` for more
+        information.
+        """
+        pass
 
-    This object will handle the swapping of the default shell when in and out
-    of the context.
-
-    :param BaseNode node: Node to default shell to swap.
-    :param str shell_to_use: Shell to use during the context session.
-    """
-
-    def __init__(self, node, shell_to_use):
-        self._node = node
-        self._shell_to_use = shell_to_use
-        self._default_shell = node.default_shell
-
-    def __enter__(self):
-        self._node.default_shell = self._shell_to_use
-        return self._node.get_shell(self._default_shell)
-
-    def __exit__(self, type, value, traceback):
-        self._node.default_shell = self._default_shell
-
+    def exit(self):
+        """
+        see :meth:`topology.platforms.shell.BaseShell.exit` for more
+        information.
+        """
+        pass
 
 __all__ = [
     'TERM_CODES_REGEX',
-    'NonExistingConnectionError',
-    'AlreadyConnectedError',
-    'AlreadyDisconnectedError',
+    'DisconnectedError',
     'BaseShell',
     'PExpectShell',
     'PExpectBashShell',
-    'ShellContext'
 ]
